@@ -1,0 +1,12 @@
+# Python
+*.egg-info
+__pycache__
+.pytest_cache
+.coverage
+
+# C
+*.so
+
+# Environment
+.venv
+.vscode
