@@ -1,4 +1,4 @@
-# Quick JSON5 _(qjson5)_
+# 📎 Quick JSON5 _(qjson5)_
 
 <p align="center">
 
