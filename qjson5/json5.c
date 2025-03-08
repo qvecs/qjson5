@@ -216,64 +216,82 @@ static INLINE int arrCount(const char **ref) {
     int inItem = 0;
 
     while (1) {
-        while ((unsigned char)*p <= ' ' && *p != '\0') {
-            p++;
-        }
+        while ((unsigned char)*p <= ' ' && *p != '\0') { p++; }
         if (p[0] == '/' && p[1] == '/') {
             p += 2;
-            while (*p && *p != '\n') {
-                p++;
-            }
+            while (*p && *p != '\n') { p++; }
             continue;
         }
         if (p[0] == '/' && p[1] == '*') {
             p += 2;
             while (*p) {
-                if (p[0] == '*' && p[1] == '/') {
-                    p += 2;
-                    break;
-                }
+                if (p[0] == '*' && p[1] == '/') { p += 2; break; }
                 p++;
             }
             continue;
         }
 
         char c = *p;
-        if (!c) {
-            break;
-        }
+        if (!c) break;
+
         if (c == '[') {
             depth++;
+            p++;
+            continue;
         } else if (c == ']') {
             depth--;
             if (depth <= 0) {
-                if (inItem) {
-                    cnt++;
-                }
+                if (inItem) { cnt++; }
                 break;
             }
+            p++;
+            continue;
+        } else if (c == '{') {
+            int obj_depth = 1;
+            p++;
+            while (*p && obj_depth > 0) {
+                if (*p == '"' || *p == '\'') {
+                    char quote = *p;
+                    p++;
+                    while (*p && *p != quote) {
+                        if (*p == '\\' && p[1]) { p += 2; continue; }
+                        p++;
+                    }
+                    if (*p) p++;
+                    continue;
+                } else if (*p == '{') {
+                    obj_depth++;
+                } else if (*p == '}') {
+                    obj_depth--;
+                }
+                p++;
+            }
+            inItem = 1;
+            continue;
+        } else if (c == '"' || c == '\'') {
+            char quote = c;
+            p++;
+            while (*p && *p != quote) {
+                if (*p == '\\' && p[1]) { p += 2; continue; }
+                p++;
+            }
+            if (*p) p++;
+            inItem = 1;
+            continue;
         } else if (c == ',') {
             if (depth == 1 && inItem) {
                 cnt++;
                 inItem = 0;
             }
+            p++;
+            continue;
         } else {
             inItem = 1;
-            if (c == '"' || c == '\'') {
-                char qc = c;
-                p++;
-                while (*p && *p != qc) {
-                    if (*p == '\\' && p[1]) {
-                        p += 2;
-                        continue;
-                    }
-                    p++;
-                }
-            }
+            p++;
+            continue;
         }
-        p++;
     }
-    return (cnt < 0) ? 0 : cnt;
+    return cnt;
 }
 
 /*
@@ -479,6 +497,7 @@ PyObject* fastNum(const char *start, const char **end) {
         isFloat = 1;
         p++;
         while (*p >= '0' && *p <= '9') {
+            hasDig = 1;
             frac += (*p - '0') * factor;
             factor *= 0.1;
             p++;
@@ -525,9 +544,6 @@ PyObject* fastNum(const char *start, const char **end) {
         if (eMode && eVal != 0) {
             double factorE = 1.0;
             long tmpE = eVal;
-            if (eSign < 0) {
-                tmpE = -tmpE;
-            }
             while (tmpE-- > 0) {
                 factorE *= 10.0;
             }
