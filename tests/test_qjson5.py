@@ -1,5 +1,7 @@
 import io
+
 import pytest
+
 import qjson5
 
 
@@ -75,6 +77,38 @@ def test_array_handling():
     data = "[1, 2, 3, /* comment */ 4, 5]"
     parsed = qjson5.loads(data)
     assert parsed == [1, 2, 3, 4, 5]
+
+
+def test_array_with_object_bugfix():
+    data = """
+    {
+      "a": [
+        {
+          "n1": 1,
+          "n2": 2,
+          "n3": 3
+        }
+      ]
+    }
+    """
+    parsed = qjson5.loads(data)
+    assert isinstance(parsed["a"], list)
+    assert len(parsed["a"]) == 1
+    assert parsed["a"][0] == {"n1": 1, "n2": 2, "n3": 3}
+
+
+def test_nested_arrays():
+    data = """
+    {
+      "nested": [
+        [1, 2],
+        [3, 4],
+        [[5, 6]]
+      ]
+    }
+    """
+    parsed = qjson5.loads(data)
+    assert parsed["nested"] == [[1, 2], [3, 4], [[5, 6]]]
 
 
 def test_dump_basic():
@@ -153,6 +187,12 @@ def test_string_escapes():
     assert parsed["backslash"] == r"C:\Users\Name"
 
 
+def test_unknown_escape():
+    data = r'{"a": "\q"}'
+    parsed = qjson5.loads(data)
+    assert parsed["a"] == "q"
+
+
 def test_large_numbers():
     data = """
     {
@@ -177,11 +217,81 @@ def test_plus_sign_number():
     assert parsed["plusNumber"] == 42
 
 
+def test_leading_decimal():
+    data = '{"a": .5, "b": -.5}'
+    parsed = qjson5.loads(data)
+    assert abs(parsed["a"] - 0.5) < 1e-9
+    assert abs(parsed["b"] + 0.5) < 1e-9
+
+
+def test_leading_decimal_variants():
+    data = '{"a": .5, "b": -.5, "c": +.5}'
+    parsed = qjson5.loads(data)
+    assert abs(parsed["a"] - 0.5) < 1e-9
+    assert abs(parsed["b"] + 0.5) < 1e-9
+    assert abs(parsed["c"] - 0.5) < 1e-9
+
+
+def test_leading_decimal_with_exponent():
+    data = '{"a": .5e2, "b": -.5E-1}'
+    parsed = qjson5.loads(data)
+    assert abs(parsed["a"] - 50) < 1e-9
+    assert abs(parsed["b"] + 0.05) < 1e-9
+
+
+def test_invalid_leading_decimal_missing_digits():
+    data = '{"a": .}'
+    import pytest
+
+    with pytest.raises(ValueError):
+        qjson5.loads(data)
+
+
+def test_invalid_leading_decimal_with_invalid_exponent():
+    data = '{"a": .e2}'
+    import pytest
+
+    with pytest.raises(ValueError):
+        qjson5.loads(data)
+
+
 def test_unicode_characters():
     data = '{"unicode": "Hello \\u00F1 World", "emoji": "Smile \\uD83D\\uDE03"}'
     parsed = qjson5.loads(data)
     assert "unicode" in parsed
     assert "emoji" in parsed
+
+
+def test_deeply_nested():
+    nested = "0"
+    for _ in range(50):
+        nested = f"[{nested}]"
+    data = f'{{"a": {nested}}}'
+    parsed = qjson5.loads(data)
+    temp = parsed["a"]
+    for _ in range(50):
+        assert isinstance(temp, list)
+        assert len(temp) == 1
+        temp = temp[0]
+    assert temp == 0
+
+
+def test_multiple_comments():
+    data = """
+    // First comment
+    {
+       /* Multi-line
+          comment */
+       "a": 1, // trailing comment
+       "b": [ // comment before array
+          2, // comment inside array
+          3
+       ] // comment after array
+    }
+    """
+    parsed = qjson5.loads(data)
+    assert parsed["a"] == 1
+    assert parsed["b"] == [2, 3]
 
 
 def test_invalid_syntax():
@@ -222,6 +332,18 @@ def test_unterminated_string():
 
 def test_unterminated_array():
     data = "[1, 2, 3"
+    with pytest.raises(ValueError):
+        qjson5.loads(data)
+
+
+def test_invalid_comment():
+    data = '{"a": 123 /* missing closing comment }'
+    with pytest.raises(ValueError):
+        qjson5.loads(data)
+
+
+def test_invalid_number_infinity():
+    data = '{"a": Infinity}'
     with pytest.raises(ValueError):
         qjson5.loads(data)
 
