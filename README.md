@@ -96,7 +96,7 @@ Non-JSON5 library:
 ==== JSON Libraries Dump+Load Benchmark ====
 
 --- Data Set: SMALL (10 keys per level, 2 levels) ---
-json5        => Skipped
+json5        => avg: 5274.9761 ms (std: 74.0018 ms) over 1000 iterations
 builtin-json => avg: 14.1933 ms (std: 0.5063 ms) over 1000 iterations
 pyjson5      => avg: 11.7564 ms (std: 0.1826 ms) over 1000 iterations
 qjson5       => avg: 8.4363 ms (std: 0.0669 ms) over 1000 iterations
