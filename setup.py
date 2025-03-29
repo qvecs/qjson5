@@ -1,11 +1,11 @@
-from setuptools import setup, Extension
+from setuptools import Extension, setup
 
 with open("README.md", encoding="utf-8") as f:
     long_desc = f.read()
 
 setup(
     name="qjson5",
-    version="1.0.1",
+    version="1.0.2",
     author="Quick Vectors",
     author_email="felipe@qvecs.com",
     description="JSON5 parser for Python written in C.",
