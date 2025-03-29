@@ -18,14 +18,15 @@ To run:
     python scripts/benchmark.py
 """
 
-import time
-import statistics
-import random
-import string
-
 import json
-import pyjson5
+import random
+import statistics
+import string
+import time
+
 import json5
+import pyjson5
+
 import qjson5
 
 random.seed(0)
@@ -138,6 +139,8 @@ def run_benchmark(
                     duration = time_library(lib_label, func, data_obj, iterations)
                     timings.append(duration)
             except Exception as e:
+                if getattr(e, "message"):
+                    e = e.message
                 print(f"{lib_label:12s} => Error: {e}")
                 continue
             avg_time = statistics.mean(timings)

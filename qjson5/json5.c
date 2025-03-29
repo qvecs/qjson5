@@ -17,6 +17,7 @@
 #define IS_JS_IDENT_START(c) ((c) == '_' || (c) == '$' || isalpha((unsigned char)(c)))
 #define IS_JS_IDENT_PART(c)  ((c) == '_' || (c) == '$' || isalnum((unsigned char)(c)))
 
+// Forward declarations
 static INLINE void skip_whitespace(const char **p);
 static INLINE PyObject* parse_value(const char **p);
 static PyObject* parse_object(const char **p);
@@ -27,9 +28,12 @@ static INLINE PyObject* parse_true(const char **p);
 static INLINE PyObject* parse_false(const char **p);
 static INLINE PyObject* parse_null(const char **p);
 
+/* Forward declaration for fastNum */
+static PyObject* fastNum(const char *start, const char **end);
+
 /*
  * skip_whitespace:
- * Advances the pointer over whitespace comments.
+ * Advances the pointer over whitespace and comments.
  */
 static INLINE void skip_whitespace(const char **ref) {
     const char *p = *ref;
@@ -206,152 +210,53 @@ static PyObject* parse_object(const char **ref) {
 }
 
 /*
- * arrCount:
- * Quick pass to count array items for pre-allocating the PyList.
- */
-static INLINE int arrCount(const char **ref) {
-    const char *p = *ref;
-    int depth = 1;
-    int cnt = 0;
-    int inItem = 0;
-
-    while (1) {
-        while ((unsigned char)*p <= ' ' && *p != '\0') {
-            p++;
-        }
-        if (p[0] == '/' && p[1] == '/') {
-            p += 2;
-            while (*p && *p != '\n') {
-                p++;
-            }
-            continue;
-        }
-        if (p[0] == '/' && p[1] == '*') {
-            p += 2;
-            while (*p) {
-                if (p[0] == '*' && p[1] == '/') {
-                    p += 2;
-                    break;
-                }
-                p++;
-            }
-            continue;
-        }
-
-        char c = *p;
-        if (!c) {
-            break;
-        }
-        if (c == '[') {
-            depth++;
-        } else if (c == ']') {
-            depth--;
-            if (depth <= 0) {
-                if (inItem) {
-                    cnt++;
-                }
-                break;
-            }
-        } else if (c == ',') {
-            if (depth == 1 && inItem) {
-                cnt++;
-                inItem = 0;
-            }
-        } else {
-            inItem = 1;
-            if (c == '"' || c == '\'') {
-                char qc = c;
-                p++;
-                while (*p && *p != qc) {
-                    if (*p == '\\' && p[1]) {
-                        p += 2;
-                        continue;
-                    }
-                    p++;
-                }
-            }
-        }
-        p++;
-    }
-    return (cnt < 0) ? 0 : cnt;
-}
-
-/*
  * parse_array:
  * Creates a PyList from JSON5 array syntax.
+ * Simplified to use dynamic appending.
  */
 static PyObject* parse_array(const char **ref) {
-    while ((unsigned char)**ref <= ' ' && **ref != '\0') {
-        (*ref)++;
-    }
-    if (**ref == ']') {
-        (*ref)++;
-        return PyList_New(0);
-    }
-    const char *saved = *ref;
-    int guess = arrCount(&saved);
-    if (guess < 1) {
-        guess = 1;
-    }
-    PyObject *lst = PyList_New(guess);
+    PyObject *lst = PyList_New(0);
     if (!lst) {
         return NULL;
     }
 
-    int idx = 0;
-    while (**ref) {
+    while (1) {
         skip_whitespace(ref);
         if (**ref == ']') {
             (*ref)++;
-            while (idx < guess) {
-                PyList_SetItem(lst, idx, Py_NewRef(Py_None));
-                idx++;
-            }
-            return lst;
+            break;
         }
+
         PyObject *val = parse_value(ref);
         if (!val) {
             Py_DECREF(lst);
             return NULL;
         }
-        if (idx < guess) {
-            PyList_SET_ITEM(lst, idx, val);
-        } else {
-            int r = PyList_Append(lst, val);
+        if (PyList_Append(lst, val) < 0) {
             Py_DECREF(val);
-            if (r < 0) {
-                Py_DECREF(lst);
-                return NULL;
-            }
+            Py_DECREF(lst);
+            return NULL;
         }
-        idx++;
+        Py_DECREF(val);
 
         skip_whitespace(ref);
-        if (**ref == ']') {
+        if (**ref == ',') {
             (*ref)++;
-            while (idx < guess) {
-                PyList_SetItem(lst, idx, Py_NewRef(Py_None));
-                idx++;
-            }
-            return lst;
-        } else if (**ref == ',') {
-            (*ref)++;
+            // Allow trailing comma: if next is ']', finish parsing.
             skip_whitespace(ref);
             if (**ref == ']') {
                 (*ref)++;
-                while (idx < guess) {
-                    PyList_SetItem(lst, idx, Py_NewRef(Py_None));
-                    idx++;
-                }
-                return lst;
+                break;
             }
+        } else if (**ref == ']') {
+            (*ref)++;
+            break;
         } else {
             Py_DECREF(lst);
             RAISE("Expected ']' or ','");
         }
     }
-    Py_DECREF(lst);
-    RAISE("Unterminated array");
+    return lst;
 }
 
 /*
@@ -381,6 +286,14 @@ static PyObject* parse_string(const char **ref) {
         if (c == '\\') {
             (*ref)++;
             c = **ref;
+            // Skip line continuation if backslash is immediately followed by a newline.
+            if (c == '\n' || c == '\r') {
+                if (c == '\r' && (*ref)[1] == '\n') {
+                    (*ref)++;
+                }
+                (*ref)++;
+                continue;
+            }
             switch (c) {
                 case 'n':  buf[length++] = '\n'; break;
                 case 't':  buf[length++] = '\t'; break;
@@ -416,15 +329,7 @@ static PyObject* parse_string(const char **ref) {
  * Tries to parse an integer or floating value from the input.
  */
 static INLINE PyObject* parse_number(const char **ref) {
-    const char *start = *ref;
-    const char *endp;
-    extern PyObject* fastNum(const char*, const char**);
-    PyObject *nm = fastNum(start, &endp);
-    if (!nm) {
-        RAISE("Invalid number");
-    }
-    *ref = endp;
-    return nm;
+    return fastNum(*ref, ref);
 }
 
 /*
@@ -449,7 +354,7 @@ static INLINE PyObject* parse_null(const char **ref) {
  * fastNum:
  * Helper for parse_number; returns PyLong or PyFloat.
  */
-PyObject* fastNum(const char *start, const char **end) {
+static PyObject* fastNum(const char *start, const char **end) {
     const char *p = start;
     int sign = 1;
     if (*p == '-') {
@@ -459,29 +364,74 @@ PyObject* fastNum(const char *start, const char **end) {
         p++;
     }
 
-    while ((unsigned char)*p <= ' ' && *p != '\0') {
-        p++;
-    }
-
-    long long iPart = 0;
-    int hasDig = 0;
-    while (*p >= '0' && *p <= '9') {
-        hasDig = 1;
-        iPart = (iPart * 10) + (*p - '0');
-        p++;
+    // Check for hexadecimal literal: e.g. 0xdecaf
+    if (*p == '0' && (p[1] == 'x' || p[1] == 'X')) {
+        p += 2;
+        unsigned long long hexVal = 0;
+        int hasHex = 0;
+        while (isxdigit((unsigned char)*p)) {
+            hasHex = 1;
+            int digit = 0;
+            if (*p >= '0' && *p <= '9')
+                digit = *p - '0';
+            else if (*p >= 'a' && *p <= 'f')
+                digit = *p - 'a' + 10;
+            else if (*p >= 'A' && *p <= 'F')
+                digit = *p - 'A' + 10;
+            hexVal = hexVal * 16 + digit;
+            p++;
+        }
+        if (!hasHex) {
+            PyErr_SetString(PyExc_ValueError, "Invalid hexadecimal number");
+            return NULL;
+        }
+        *end = p;
+        if (sign < 0) {
+            if (hexVal <= 0x8000000000000000ULL)
+                return PyLong_FromLongLong(-(long long)hexVal);
+            else
+                return PyFloat_FromDouble(-(double)hexVal);
+        } else {
+            if (hexVal <= 0x7FFFFFFFFFFFFFFFULL)
+                return PyLong_FromLongLong((long long)hexVal);
+            else
+                return PyFloat_FromDouble((double)hexVal);
+        }
     }
 
     int isFloat = 0;
     double frac = 0.0;
     double factor = 0.1;
+    int hasDig = 0;
+    long long iPart = 0;
 
+    // Support numbers starting with a dot (e.g. .8675309)
     if (*p == '.') {
         isFloat = 1;
         p++;
         while (*p >= '0' && *p <= '9') {
+            hasDig = 1;
             frac += (*p - '0') * factor;
             factor *= 0.1;
             p++;
+        }
+    } else {
+        // Parse integer part
+        while (*p >= '0' && *p <= '9') {
+            hasDig = 1;
+            iPart = (iPart * 10) + (*p - '0');
+            p++;
+        }
+        // Check for decimal point (allow trailing dot)
+        if (*p == '.') {
+            isFloat = 1;
+            p++;
+            while (*p >= '0' && *p <= '9') {
+                hasDig = 1;
+                frac += (*p - '0') * factor;
+                factor *= 0.1;
+                p++;
+            }
         }
     }
 
@@ -505,6 +455,7 @@ PyObject* fastNum(const char *start, const char **end) {
     *end = p;
 
     if (!hasDig) {
+        PyErr_SetString(PyExc_ValueError, "Invalid number literal");
         return NULL;
     }
     if (!isFloat) {
@@ -523,14 +474,7 @@ PyObject* fastNum(const char *start, const char **end) {
             dbl = -dbl;
         }
         if (eMode && eVal != 0) {
-            double factorE = 1.0;
-            long tmpE = eVal;
-            if (eSign < 0) {
-                tmpE = -tmpE;
-            }
-            while (tmpE-- > 0) {
-                factorE *= 10.0;
-            }
+            double factorE = pow(10.0, eVal);
             if (eSign < 0) {
                 dbl /= factorE;
             } else {
@@ -538,9 +482,9 @@ PyObject* fastNum(const char *start, const char **end) {
             }
         }
         double integralPart;
-        if (modf(dbl, &integralPart) == 0.0
-            && dbl >= -9007199254740992.0
-            && dbl <= 9007199254740992.0) {
+        if (modf(dbl, &integralPart) == 0.0 &&
+            dbl >= -9007199254740992.0 &&
+            dbl <= 9007199254740992.0) {
             long long i64 = (long long)dbl;
             return PyLong_FromLongLong(i64);
         } else {
@@ -550,8 +494,8 @@ PyObject* fastNum(const char *start, const char **end) {
 }
 
 /*
- * dump_value, dump_dict, dump_list:
- * These handle writing Python data -> JSON5 text into a buffer.
+ * Dumping functions: dump_value, dump_dict, dump_list
+ * Convert Python objects to JSON5 text.
  */
 static void dump_value(PyObject *obj, int indent, int level,
                        char **buffer, size_t *len, size_t *cap);
@@ -574,6 +518,8 @@ static INLINE void grow(char **buf, size_t *used, size_t *capacity, size_t need)
             *buf = NULL;
             *capacity = 0;
             *used = 0;
+            PyErr_NoMemory();
+            return;
         } else {
             *buf = tmp;
         }
@@ -649,10 +595,13 @@ static void dump_value(PyObject *obj, int indent, int level,
         }
         Py_DECREF(tmp);
     } else if (PyUnicode_Check(obj)) {
+        const char *s = PyUnicode_AsUTF8(obj);
+        if (!s) {
+            return;
+        }
         append_char(buffer, len, cap, '\"');
-        Py_ssize_t sz = PyUnicode_GET_LENGTH(obj);
-        for (Py_ssize_t i = 0; i < sz; i++) {
-            Py_UCS4 ch = PyUnicode_ReadChar(obj, i);
+        for (const char *p = s; *p; p++) {
+            unsigned char ch = (unsigned char)*p;
             switch (ch) {
                 case '\"': append_str(buffer, len, cap, "\\\""); break;
                 case '\\': append_str(buffer, len, cap, "\\\\"); break;
@@ -662,18 +611,12 @@ static void dump_value(PyObject *obj, int indent, int level,
                 case '\r': append_str(buffer, len, cap, "\\r");  break;
                 case '\t': append_str(buffer, len, cap, "\\t");  break;
                 default:
-                    if (ch < 0x80) {
-                        append_char(buffer, len, cap, (char)ch);
+                    if (ch < 0x20) {
+                        char esc[7];
+                        snprintf(esc, sizeof(esc), "\\u%04x", ch);
+                        append_str(buffer, len, cap, esc);
                     } else {
-                        PyObject *one = PyUnicode_New(1, ch);
-                        if (one) {
-                            PyUnicode_WriteChar(one, 0, ch);
-                            const char *u = PyUnicode_AsUTF8(one);
-                            if (u) {
-                                append_str(buffer, len, cap, u);
-                            }
-                            Py_DECREF(one);
-                        }
+                        append_char(buffer, len, cap, (char)ch);
                     }
                     break;
             }
@@ -722,6 +665,9 @@ static void dump_dict(PyObject *obj, int indent, int level,
         dump_value(val, indent, level + 1, buffer, len, cap);
         if (i < dsize) {
             append_char(buffer, len, cap, ',');
+            if (indent == 0) {
+                append_char(buffer, len, cap, ' ');
+            }
         }
         if (indent > 0) {
             append_char(buffer, len, cap, '\n');
@@ -737,7 +683,13 @@ static void dump_dict(PyObject *obj, int indent, int level,
 static void dump_list(PyObject *obj, int indent, int level,
                       char **buffer, size_t *len, size_t *cap) {
     append_char(buffer, len, cap, '[');
-    Py_ssize_t sz = PySequence_Size(obj);
+    Py_ssize_t sz = 0;
+    int isList = PyList_Check(obj);
+    if (isList) {
+        sz = PyList_GET_SIZE(obj);
+    } else {
+        sz = PySequence_Size(obj);
+    }
     if (sz == 0) {
         append_char(buffer, len, cap, ']');
         return;
@@ -746,12 +698,21 @@ static void dump_list(PyObject *obj, int indent, int level,
         append_char(buffer, len, cap, '\n');
     }
     for (Py_ssize_t i = 0; i < sz; i++) {
-        PyObject *item = PySequence_GetItem(obj, i);
+        PyObject *item = NULL;
+        if (isList) {
+            item = PyList_GET_ITEM(obj, i);
+            Py_INCREF(item);
+        } else {
+            item = PySequence_GetItem(obj, i);
+        }
         append_indent(indent, level + 1, buffer, len, cap);
         dump_value(item, indent, level + 1, buffer, len, cap);
         Py_DECREF(item);
         if (i < sz - 1) {
             append_char(buffer, len, cap, ',');
+            if (indent == 0) {
+                append_char(buffer, len, cap, ' ');
+            }
         }
         if (indent > 0) {
             append_char(buffer, len, cap, '\n');
