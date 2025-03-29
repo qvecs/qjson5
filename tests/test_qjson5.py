@@ -1,10 +1,7 @@
 import io
-<<<<<<< HEAD
 import textwrap
-=======
 
 import pytest
->>>>>>> origin/main
 
 import qjson5
 
