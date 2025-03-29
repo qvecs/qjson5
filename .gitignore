@@ -3,6 +3,7 @@
 __pycache__
 .pytest_cache
 .coverage
+build
 
 # C
 *.so
