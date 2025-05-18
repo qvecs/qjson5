@@ -47,7 +47,7 @@ jobs:
         run: python -m build --sdist --outdir dist
 
       - name: Upload dist-${{ matrix.os }}
-        uses: actions/upload-artifact
+        uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.os }}
           path: dist
@@ -60,7 +60,7 @@ jobs:
 
     steps:
       - name: Download all dists
-        uses: actions/download-artifact
+        uses: actions/download-artifact@v4
         with:
           path: dist
 
