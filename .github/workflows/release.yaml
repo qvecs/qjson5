@@ -8,6 +8,7 @@ jobs:
   build-dist:
     runs-on: ${{ matrix.os }}
     env:
+      CIBW_ENABLE: pypy
       CIBW_SKIP: cp3*-win* *-i686 cp36-* cp37-* pp36-* pp37-*
     strategy:
       matrix:
